@@ -209,19 +209,29 @@ def nvm_lock(lock):
 # 		00 19 56 af f5 35 5f 00 (0xd8-0xdf)
 # 		00 4b 90 21 43 00 40 fb (0xe0-0xe7)
 def nvm_dump():
-	nvm_lock(False)
+	nvm_lock(False) # unlock NVM
 
-	sector_data = []
-	for num_sector in range(0, 5):
-		bus.write_byte_data(addr, 0x97, 0 & 0x07) # send command opcode READ(0x00) to FTP_CTRL_1(0x97)
-		bus.write_byte_data(addr, 0x96, (num_sector & 0x07) | 0x80 | 0x40 | 0x10)
+	def nvm_wait_for_execution():
 		while True:
 			reg8 = bus.read_byte_data(addr, 0x96)
 			if reg8 & 0x10 == 0x00:
 				break
-		sector_data.append(bus.read_i2c_block_data(addr, 0x53)[0:8])
-	bus.write_byte_data(addr, 0x95, 0x00) # lock nvm 0x95(FTP_CUST_PASSWORD_REG) <= !0x47 (FTP_CUST_PASSWORD)
-	nvm_lock(True)
+
+	sector_data = []
+	for num_sector in range(0, 5):
+		# send command opcode READ(0x00) to FTP_CTRL_1(0x97)
+		bus.write_byte_data(addr, 0x97, 0 & 0x07) 
+		# execute command
+		bus.write_byte_data(addr, 0x96, (num_sector & 0x07) | 0x80 | 0x40 | 0x10)
+		nvm_wait_for_execution()
+		# read 8 bytes that are copied from nvm to 0x53-0x5a
+		sector = []
+		for i in range(0, 8):
+			sector.append(bus.read_byte_data(addr, 0x53 + i))
+		sector_data.append(sector)
+	nvm_lock(True) # lock NVM
+
+	# nicely print out the values
 	sec = 0
 	for sector in sector_data:
 		line = "%d: [" % sec
@@ -237,7 +247,7 @@ def nvm_dump():
 #	Enter Write mode:
 #	1. PASSWORD_REG(0x95) <= PASSWORD(0x47) to unlock flash
 #	2. RW_BUFFER(0x53) <= 0 if partial erasing sectors
-#	3. CTRL_0(0x96) <= PWR | RST_N to soft reset chip and power off 
+#	3. CTRL_0(0x96) <= PWR | RST_N to soft reset chip and power on 
 #	4. CTRL_1(0x97) <= SECTORS_TOBE_ERASED_MASK << 3 | WRITE_SER to send erase command for the specified sectors (1 hot encoded)
 #	5. CTRL_0(0x96) <= PWR | RST_N | REQ to commit command in CTRL_1 
 #	6. Wait until REQ bit in CTRL_0 is cleared
@@ -289,15 +299,12 @@ def nvm_write(sector_data):
 
 	nvm_lock(False)
 #	Erase specified sectors to be able to program them
-	bus.write_byte_data(addr, 0x53, 0x00)
-	bus.write_byte_data(addr, 0x96, pwr | rst_n)
+	#bus.write_byte_data(addr, 0x53, 0x00)
+	#bus.write_byte_data(addr, 0x96, pwr | rst_n)
 	bus.write_byte_data(addr, 0x97, section_mask << 3 | 0x02) # WRITE_SER opcode
 	bus.write_byte_data(addr, 0x96, pwr | rst_n | req)
 	nvm_wait_for_execution()
 	bus.write_byte_data(addr, 0x97, 0x07) # Soft_prog_sector opcode
-	bus.write_byte_data(addr, 0x96, pwr | rst_n | req)
-	nvm_wait_for_execution()
-	bus.write_byte_data(addr, 0x97, 0x05) # erase_sector opcode
 	bus.write_byte_data(addr, 0x96, pwr | rst_n | req)
 	nvm_wait_for_execution()
 	bus.write_byte_data(addr, 0x97, 0x05) # erase_sector opcode
@@ -322,7 +329,8 @@ def nvm_write(sector_data):
 	nvm_lock(True)
 
 #	\brief These are the default values programmed by factory
-nvm_factory_values= {0: [0x00, 0x00, 0xb0, 0xaa, 0x00, 0x45, 0x00, 0x00], 1: [0x10, 0x40, 0x9c, 0x1c, 0xff, 0x01, 0x3c, 0xdf], 2: [0x02, 0x40, 0x0f, 0x00, 0x32, 0x00, 0xfc, 0xf1], 3: [0x00, 0x19, 0x56, 0xaf, 0xf5, 0x35, 0x5f, 0x00], 4: [0x00, 0x4b, 0x90, 0x21, 0x43, 0x00, 0x40, 0xfb]}
+nvm_factory_defaults = {0: [0x00, 0x00, 0xb0, 0xaa, 0x00, 0x45, 0x00, 0x00], 1: [0x10, 0x40, 0x9c, 0x1c, 0xff, 0x01, 0x3c, 0xdf], 2: [0x02, 0x40, 0x0f, 0x00, 0x32, 0x00, 0xfc, 0xf1], 3: [0x00, 0x19, 0x56, 0xaf, 0xf5, 0x35, 0x5f, 0x00], 4: [0x00, 0x4b, 0x90, 0x21, 0x43, 0x00, 0x40, 0xfb]}
+nvm_12v = {0: [0x00,0x00,0xB0,0xAA,0x00,0x45,0x00,0x00], 1: [0x00,0x40,0x9D,0x1C,0xFF,0x01,0x3C,0xDF], 2: [0x02,0x40,0x0F,0x00,0x32,0x00,0xFC,0xF1], 3: [0x00,0x19,0xBF,0x55,0x57,0x55,0x55,0x00], 4: [0x00,0x2D,0xF0,0x20,0x43,0x00,0x00,0xFB]}
 
 
 def vbus_ctrl():
